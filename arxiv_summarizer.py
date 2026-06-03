@@ -31,8 +31,8 @@ client = Anthropic()  # reads ANTHROPIC_API_KEY from environment
 
 arxiv_client = arxiv.Client(
     page_size=100,
-    delay_seconds=5.0,   # wait 5s between requests to arxiv (default is 3)
-    num_retries=5,       # retry failed requests a few times
+    delay_seconds=10.0,   # be generous; arxiv recommends slow polling
+    num_retries=3,
 )
 
 # ---------- 1. FETCH ----------
