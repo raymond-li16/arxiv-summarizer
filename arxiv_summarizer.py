@@ -9,7 +9,7 @@ from anthropic import Anthropic
 # ---------- CONFIG ----------
 CATEGORIES = "cat:physics.acc-ph OR cat:physics.plasm-ph OR cat:physics.optics"
 LOOKBACK_DAYS = 1          # how far back to pull
-MAX_RESULTS = 300          # safety cap on how many to fetch
+MAX_RESULTS = 100         # safety cap on how many to fetch
 MODEL = "claude-haiku-4-5-20251001"
 
 RESEARCH_FOCUS = (
@@ -29,6 +29,12 @@ EMAIL_APP_PASSWORD = os.environ["EMAIL_APP_PASSWORD"]
 client = Anthropic()  # reads ANTHROPIC_API_KEY from environment
 
 
+arxiv_client = arxiv.Client(
+    page_size=100,
+    delay_seconds=5.0,   # wait 5s between requests to arxiv (default is 3)
+    num_retries=5,       # retry failed requests a few times
+)
+
 # ---------- 1. FETCH ----------
 def fetch_recent_papers():
     search = arxiv.Search(
@@ -38,9 +44,9 @@ def fetch_recent_papers():
     )
     cutoff = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
     papers = []
-    for result in arxiv.Client().results(search):
+    for result in arxiv_client.results(search):   # <-- use the shared client
         if result.published < cutoff:
-            break  # results are date-sorted, so we can stop early
+            break
         papers.append(result)
     return papers
 
