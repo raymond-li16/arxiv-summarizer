@@ -1,4 +1,6 @@
 import os
+import json
+import time
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
@@ -8,9 +10,11 @@ from anthropic import Anthropic
 
 # ---------- CONFIG ----------
 CATEGORIES = "cat:physics.acc-ph OR cat:physics.plasm-ph OR cat:physics.optics"
-LOOKBACK_DAYS = 1          # how far back to pull
-MAX_RESULTS = 100         # safety cap on how many to fetch
+LOOKBACK_DAYS = 2          # wider window so we never miss late-announced papers
+MAX_RESULTS = 200
 MODEL = "claude-haiku-4-5-20251001"
+
+SEEN_FILE = "/Users/raymondli/Agents/seen_ids.json"
 
 RESEARCH_FOCUS = (
     "laser plasma accelerators (LPAs / LWFA): laser wakefield acceleration, "
@@ -22,33 +26,58 @@ RESEARCH_FOCUS = (
 # Email settings
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
-EMAIL_FROM = os.environ["EMAIL_FROM"]        # your gmail address
-EMAIL_TO = os.environ["EMAIL_TO"]            # where to send the digest
+EMAIL_FROM = os.environ["EMAIL_FROM"]
+EMAIL_TO = os.environ["EMAIL_TO"]
 EMAIL_APP_PASSWORD = os.environ["EMAIL_APP_PASSWORD"]
 
 client = Anthropic()  # reads ANTHROPIC_API_KEY from environment
 
-
 arxiv_client = arxiv.Client(
     page_size=100,
-    delay_seconds=10.0,   # be generous; arxiv recommends slow polling
+    delay_seconds=10.0,
     num_retries=3,
 )
 
-# ---------- 1. FETCH ----------
-def fetch_recent_papers():
+
+# ---------- SEEN-IDS TRACKING ----------
+def load_seen():
+    if os.path.exists(SEEN_FILE):
+        with open(SEEN_FILE) as f:
+            return set(json.load(f))
+    return set()
+
+
+def save_seen(seen):
+    with open(SEEN_FILE, "w") as f:
+        json.dump(list(seen), f)
+
+
+# ---------- 1. FETCH (with backoff) ----------
+def fetch_recent_papers(max_attempts=6):
     search = arxiv.Search(
         query=CATEGORIES,
         sort_by=arxiv.SortCriterion.SubmittedDate,
         max_results=MAX_RESULTS,
     )
     cutoff = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
-    papers = []
-    for result in arxiv_client.results(search):   # <-- use the shared client
-        if result.published < cutoff:
-            break
-        papers.append(result)
-    return papers
+
+    for attempt in range(max_attempts):
+        try:
+            papers = []
+            for result in arxiv_client.results(search):
+                print("Fetched paper:", result.title)
+                if result.published < cutoff:
+                    break
+                papers.append(result)
+            return papers
+        except Exception as e:
+            if "429" in str(e) and attempt < max_attempts - 1:
+                wait = 2 ** attempt * 30  # 30s, 60s, 120s, ...
+                print(f"429 received, waiting {wait}s before retry...")
+                time.sleep(wait)
+            else:
+                raise
+    return []
 
 
 # ---------- 2. CLASSIFY ----------
@@ -87,14 +116,18 @@ Abstract: {paper.summary}"""
 
 
 # ---------- 3. BUILD DIGEST ----------
-def build_digest(buckets):
+def build_digest(buckets, total_new, total_window):
     order = ["relevant", "mildly relevant", "not relevant"]
     headers = {
         "relevant": "🟢 RELEVANT",
         "mildly relevant": "🟡 MILDLY RELEVANT",
         "not relevant": "⚪ NOT RELEVANT",
     }
-    lines = [f"arXiv digest — {datetime.now().strftime('%Y-%m-%d')}", ""]
+    lines = [
+        f"arXiv LPA digest — {datetime.now().strftime('%Y-%m-%d')}",
+        f"{total_new} new papers (of {total_window} in lookback window)",
+        "",
+    ]
     for cat in order:
         items = buckets.get(cat, [])
         lines.append(f"{headers[cat]} ({len(items)})")
@@ -127,16 +160,30 @@ def send_email(body):
 
 # ---------- MAIN ----------
 def main():
+    seen = load_seen()
     papers = fetch_recent_papers()
+    new_papers = [p for p in papers if p.entry_id not in seen]
+    print(f"Fetched {len(papers)} papers, {len(new_papers)} are new since last run.")
+
     buckets = {"relevant": [], "mildly relevant": [], "not relevant": []}
-    for paper in papers:
+    for paper in new_papers:
         category, reason = classify(paper)
         if category not in buckets:
             category = "not relevant"
         buckets[category].append((paper, reason))
-    digest = build_digest(buckets)
-    send_email(digest)
-    print(f"Sent digest covering {len(papers)} papers.")
+
+    if new_papers:
+        digest = build_digest(buckets, len(new_papers), len(papers))
+        send_email(digest)
+        print(f"Sent digest covering {len(new_papers)} new papers "
+              f"(of {len(papers)} in window).")
+    else:
+        print(f"No new papers since last run ({len(papers)} in window, all seen).")
+    print("Categorized papers")
+
+    # Update seen with everything currently in the window
+    seen.update(p.entry_id for p in papers)
+    save_seen(seen)
 
 
 if __name__ == "__main__":
