@@ -37,6 +37,7 @@ arxiv_client = arxiv.Client(
     delay_seconds=10.0,
     num_retries=3,
 )
+print("Initialized arXiv client and Anthropic client.")
 
 
 # ---------- SEEN-IDS TRACKING ----------
@@ -62,6 +63,7 @@ def fetch_recent_papers(max_attempts=6):
     cutoff = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
 
     for attempt in range(max_attempts):
+        print(f"Attempt {attempt + 1}/{max_attempts}")
         try:
             papers = []
             for result in arxiv_client.results(search):
