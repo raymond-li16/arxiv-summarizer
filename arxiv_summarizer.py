@@ -14,7 +14,7 @@ LOOKBACK_DAYS = 2          # wider window so we never miss late-announced papers
 MAX_RESULTS = 200
 MODEL = "claude-haiku-4-5-20251001"
 
-SEEN_FILE = "/Users/raymondli/Agents/seen_ids.json"
+SEEN_FILE = "/home/raymondli/Agents/arxiv-summarizer/seen_ids.json"
 
 RESEARCH_FOCUS = (
     "laser plasma accelerators (LPAs / LWFA): laser wakefield acceleration, "
